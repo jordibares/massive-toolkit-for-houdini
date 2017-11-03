@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shelfDocument>
+  <!-- This file contains definitions of shelves, toolbars, and tools.
+ It should not be hand-edited when it is being used by the application.
+ Note, that two definitions of the same element are not allowed in
+ a single file. -->
+
+  <toolshelf name="massiveToolkit" label="Massive Toolkit">
+    <memberTool name="camera2massive"/>
+  </toolshelf>
+
+  <tool name="camera2massive" label="Cam 2 Massive" icon="OBJ_camera">
+    <helpText><![CDATA[= Massive Toolkit |> Camera 2 Massive =
+#icon: OBJ/camera
+
+#name: camera2massive
+#context: obj
+#internal: export
+#version: 1.0
+
+
+"""Export all selected cameras to massive native CAM format as multiple files."""
+
+== Introduction ==
+By selecting a few camera nodes and executing this command, those cameras are analysed and exporterd to Massive using their native CAM format.
+
+=== Workflow ===
+
+Given I have favoured a Shelf tool approach this is the workflow I am favouring;
+ 
+:task: Export cameras:
+    # Select all the cameras you want to export
+    # Go to the Massive Toolkit Shelf.
+    # Click __Cam 2 Massive__.
+    # If everything goes well you will have as many .cam files saved in your home folder as you have selected.
+    # Move those files to your massive project and load them in Massive.
+
+:task: Import cameras to massive:
+    # Open Massive.
+    # Create a camera.
+    # Load a cam file as an action.
+    
+NOTE:
+    Alternatively you can also access it via the ((Tab)) and __Massive Toolkit > Cam 2 Massive__ tool.
+
+=== Validation ===
+
+Your camera should be animated exactly as in Houdini, to verify I suggest you do a flipbook in Houdini and use it in Massive as a background in your camera, by using a combination of shading modes you can easily validate the export has been successful.
+
+== Internal behaviour ==
+
+Given we find a number of camera configurations I have divided it in two blocks;
+
+* __Static Cameras__ that are exported as a single frame tranformation.
+* __Animated Cameras__ that are exported by analysing the Translation and Rotation keyframes in the camera itself, determininig the first and last frame and exporting that section. Obviously there is a drawback that complicates things, if the camera is not animated 
+
+NOTE:
+    * If you press any modifier key like Shift, Alt, Control or Commnad then it will automatically assume an animated camera and will use the Time Range start and end as sources. Doing this we can pre-empt complex animation setups you can do in Houdini like CHOPs based animation or procedural animations via mathematical expressions, etc...
+    * It is common place to "pre-roll" for 25 frames or so to give the agents time to settle, for this very reason by design I have added 25 frames in front of the camera at export time so your animation will have 25 frames of no movment and then it will start.
+    * Cameras are exported as they are, if you need to scale them to centimeters, there is a scaleFactor in the code to assist with that, simply put 100 insted of 1 to scale to centimeters.
+
+    
+=== Temporary hardwired stuff ===
+
+At the moment there are two main design limitations I have yet to resolve.
+
+:bug:
+    At the moment there is an offset of 25 frames so you have pre-roll in your animation for the crowd to settle.
+
+:bug:
+    Also the location of the export is hardwired to your user folder.
+    
+    
+:box: Copyright Jordi Bares 2017]]></helpText>
+    <toolMenuContext name="viewer">
+      <contextOpType>Object/cam</contextOpType>
+      <contextNetType>OBJ</contextNetType>
+    </toolMenuContext>
+    <toolMenuContext name="network">
+      <contextOpType>Object/cam</contextOpType>
+      <contextNetType>OBJ</contextNetType>
+    </toolMenuContext>
+    <toolSubmenu>Massive Toolkit</toolSubmenu>
+    <script scriptType="python"><![CDATA[import os
+import hou
+import math
+import getpass
+import toolutils
+from time import gmtime, strftime
+
+# ----------------------------------------------------------------------        
+# FUNCTIONS
+# ----------------------------------------------------------------------    
+def findCameraAnimationRange(node):
+        if( node.isTimeDependent() ):
+                start   = int(math.floor(max(
+                                node.parm("tx").keyframes()[0].frame(), node.parm("ty").keyframes()[0].frame(), node.parm("tz").keyframes()[0].frame(), 
+                                node.parm("rx").keyframes()[0].frame(), node.parm("ry").keyframes()[0].frame(), node.parm("rz").keyframes()[0].frame()
+                                )))
+
+                end             = int(math.ceil(max(
+                                node.parm("tx").keyframes()[-1].frame(), node.parm("ty").keyframes()[-1].frame(), node.parm("tz").keyframes()[-1].frame(),
+                                node.parm("rx").keyframes()[-1].frame(), node.parm("ry").keyframes()[-1].frame(), node.parm("rz").keyframes()[-1].frame()
+                                )))
+        else:
+                start = end = 1
+
+        # Log the result
+        if (debugFlag): print "DEBUG : Camera [%s] starts at %d and ends at %d. '%s'" % ( node.name(), start, end )
+
+        # Return the values
+        return start, end
+
+def exportCam(node, preroll, start, end):
+    # Init counter and export range from camera animation itself.
+        frame                   = start
+        framerange              = range(start,end+1)
+
+        # If there is no animation, this is a one frame export mode thing
+        oneframeexport  = True if start==end else False
+
+    # Construct paths
+        exportName              = "%s.cam" % node.name()
+        homePath                = os.path.dirname(os.path.expanduser("~/" + getpass.getuser()))
+        fileOut                 = os.path.normpath(os.path.join(homePath, exportName))
+ 
+        # Camera based calculations necesary for FOV computation
+        aspect                  = float(node.parm('resx').evalAtFrame(start))/float(node.parm('resy').evalAtFrame(start))
+        apertureHeight  = node.parm('aperture').evalAtFrame(start)/aspect
+        apertureWidth   = node.parm('aperture').evalAtFrame(start)
+
+        # Opening file for writting
+        if (debugFlag): print "DEBUG : Saving to '%s'..." % fileOut
+        fileHandle              = open(fileOut, "w")
+
+    # Write to disk
+        try:
+                if (debugFlag): print "DEBUG : Writting header..."
+                fileHandle.write( "#---------------------------------------------------------------------\n" )
+                fileHandle.write( "#       Scene : %s\n" % hou.hipFile.path() )
+                fileHandle.write( "# Camera Name : %s\n" % node.name() )
+                fileHandle.write( "#   User Name : %s\n" % getpass.getuser() )
+                fileHandle.write( "#        Date : " + strftime("%Y-%m-%d\n", gmtime()) )
+                fileHandle.write( "#        Time : " + strftime("%H:%M:%S\n", gmtime()) )
+                        
+                # Construct the frame range, if there is no animation, then only process 1 frame.
+                if( oneframeexport ):
+                        fileHandle.write( "#       Frame : %d (no animation found)\n" % start )
+                else:
+                        fileHandle.write( "# Frame Range : %d-%d remapped to %d-%d\n" % ( start, end, (start+preroll), (end+preroll) ))
+
+                fileHandle.write( "#---------------------------------------------------------------------\n" )
+                fileHandle.write( "\n" )
+
+                # Write Filmback for the whole sequence
+                fileHandle.write( "filmback %f %f\n" % (apertureWidth, apertureHeight))
+
+                # Loop every frame in the range  
+                if (debugFlag): print "DEBUG : Processing frames from %d to %d..." % (start, end)
+                for frame in framerange:
+                        # Calculate the camera parameters necessary
+                        focalLength    = node.parm('focal').evalAtFrame(frame)
+                        fovH           = (2*math.atan(0.5*apertureWidth/focalLength)*180/math.pi)
+                        fovV           = (2*math.atan(0.5*apertureHeight/focalLength)*180/math.pi)
+                        m              = node.worldTransformAtTime(hou.frameToTime(frame)).inverted()
+
+                        # Log the progress every 25 frames for comfort
+                        if (debugFlag):
+                                if ( (frame % 25) == 0 ): print "DEBUG :    Exporting frame %d..." % frame
+                    
+                        # Write out the frame
+                        fileHandle.write( "\n" )
+                        if( oneframeexport ):
+                                fileHandle.write( "frame %d\n" % frame )
+                        else:
+                                fileHandle.write( "frame %d\n" % (frame+preroll) )
+
+                        # Write out the FOV vertical way but also document the focal length
+                        fileHandle.write( "#Focal Length %3.2fmm\n" % focalLength)
+                        fileHandle.write( "fov %f\n" % fovV)
+
+                        # Write transform matrix
+                        fileHandle.write( "transform\n" )
+                        fileHandle.write( "%f %f %f %f\n" % ( m.at(0,0), m.at(0,1), m.at(0,2), m.at(0,3) ))
+                        fileHandle.write( "%f %f %f %f\n" % ( m.at(1,0), m.at(1,1), m.at(1,2), m.at(1,3) ))
+                        fileHandle.write( "%f %f %f %f\n" % ( m.at(2,0), m.at(2,1), m.at(2,2), m.at(2,3) ))
+                        fileHandle.write( "%f %f %f %f\n" % ( (m.at(3,0)*scaleFactor), (m.at(3,1)*scaleFactor), (m.at(3,2)*scaleFactor), m.at(3,3) ))
+
+                        # Move to next frame
+                        frame = frame + 1
+        finally:
+                fileHandle.close()
+    
+        if (debugFlag): print "DEBUG : Camera [%s] export has been saved as '%s'" % ( node.name(), fileOut )
+  
+ 
+
+# ======================================================================        
+# MAIN LOOP
+# ----------------------------------------------------------------------        
+# Jordi Bares : 1.00 : Export camera  to massive CAM format (2017-07-19)
+# ----------------------------------------------------------------------        
+# To do : Implement interface to remove all the hardwired stuff        
+# ======================================================================        
+
+# Global Variables
+debugFlag       = False
+scaleFactor             = 100       # make it 100 times bigger - to convert from metres to centimetres
+framesToPreroll = 24        # this value will be added to both start and end
+output_msg              = "\n"      # initialise
+
+# Get the selection and behaviour control
+selection               = hou.selectedNodes()
+forceRange              = not (not kwargs['ctrlclick'] and not kwargs['cmdclick'] and not kwargs['shiftclick'] and not kwargs['altclick'])
+
+# If nothing selected, force a selection session filtering it to the type camera
+if len(selection) == 0:
+        selection = toolutils.sceneViewer().selectObjects( "Select one or more cameras and press Enter", allowed_types = ['cam'] )
+
+# Select file session
+#filename = hou.ui.selectFile( title='Select where to export', default_value=default_filename, file_type=hou.fileType.Image )
+
+# Get all the cameras selected and export them
+for object in selection:        
+        if( object.type().name() == 'cam' ):
+                if (debugFlag): print "DEBUG : Processing camera [%s]..." % object.name()
+
+                # Find the camera animation if any
+                if ( forceRange ):
+                        # If we use a modifier like Alt, Shift, Ctrl or Cmmand, use the frame range as this will protect us from 
+                        # very complex situations we simply can't ignore in Houdini like procedural animation on a camera of CHOP
+                        # based animation.
+                        first, last = hou.playbar.playbackRange()[0], hou.playbar.playbackRange()[1]
+                else:
+                        # This function analyses if there is animation in the node and returns the range.
+                        first, last = findCameraAnimationRange( node=object )
+
+                # Do export the camera with a preroll of 25
+                exportCam( node=object, preroll=framesToPreroll, start=first, end=last )
+
+                if ( first != last ):
+                        output_msg = output_msg + ("   Camera [%s] from %d to %d exported to %d to %d...\n" % ( object.name(), first, last, 
+                                                                                                                                                                first+framesToPreroll, last+framesToPreroll) )
+                else:
+                        output_msg = output_msg + ("   Camera [%s] exported as static...\n" % object.name())
+
+        else:
+                output_msg = output_msg + ("   Object [%s] is not a camera, skipping it...\n" % object.name())
+               
+# Message saying it is all good and finished.
+hou.ui.displayMessage("CAMERAS EXPORT FINISHED\n" + output_msg + "\nYou can now import them to Massive." )
+]]></script>
+    <keywordList>
+      <keyword>export</keyword>
+      <keyword>camera</keyword>
+    </keywordList>
+  </tool>
+</shelfDocument>
